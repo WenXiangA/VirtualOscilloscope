@@ -80,6 +80,7 @@ volatile float currentMaxPwm = 1717.0f;  // (1.65 + 1.5) / 3.3 * 1799
 
 // ADC buffers
 volatile uint16_t adcBuf[FRAME_SIZE];
+uint16_t oledSnapBuf[FRAME_SIZE];
 volatile bool     frameReady = false;
 
 // ─── Direct HAL ADC1 & DMA1 Initialization ───
@@ -345,12 +346,16 @@ void loop() {
   // 1. Send data frame when ADC buffer is full
   if (frameReady) {
     sendFrame();
+    uint32_t now = millis();
+    bool doOled = oledEnabled && (now - lastOledUpdate >= 33); // 33ms throttle (~30 FPS)
+    if (doOled) {
+      memcpy(oledSnapBuf, (const void*)adcBuf, sizeof(oledSnapBuf));
+    }
     // Restart DMA sampling for the next frame
     restartDmaSampling();
 
     // 1.1 OLED Update (Time-nested: executed while DMA is capturing in background)
-    uint32_t now = millis();
-    if (oledEnabled && (now - lastOledUpdate >= 33)) { // 33ms throttle (~30 FPS)
+    if (doOled) {
       lastOledUpdate = now;
       updateOled();
     }
@@ -383,11 +388,8 @@ void updateOled() {
   display.setTextColor(SSD1306_WHITE);
   display.setTextSize(1);
 
-  // Take a safe local snapshot of the ADC buffer
-  static uint16_t localBuf[FRAME_SIZE];
-  noInterrupts();
-  memcpy(localBuf, (void*)adcBuf, FRAME_SIZE * 2);
-  interrupts();
+  // Read from pre-DMA-restart snapshot buffer to prevent waveform tearing
+  const uint16_t* localBuf = oledSnapBuf;
 
   // Calculate Vmax/Vmin from local buffer to show real-time metrics
   uint16_t maxVal = 0;
